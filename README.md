@@ -112,8 +112,12 @@ DSH Web
 - The preview proxy does not relay WebSocket upgrades: pages load fine, but a dev
   server's HMR socket still talks to its own origin (refresh to see changes).
 - Loopback apps only.
+- The preview runs on an isolated loopback origin, so the app's own cookies and
+  localStorage are not carried over; apps that require an existing login session
+  may not render correctly.
 - Elements inside closed shadow roots or cross-origin iframes cannot be picked.
-- A DSH restart is required after installing or upgrading the plugin.
+- A DSH restart (or at least a page reload) is required after installing or
+  upgrading the plugin.
 
 ## Development
 

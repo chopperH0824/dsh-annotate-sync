@@ -134,8 +134,10 @@ DSH Web
 - 预览代理不转发 WebSocket upgrade：页面能正常加载，但 dev server 的 HMR socket
   仍然直连它自己的 origin（热更新可能不可用，刷新即可）。
 - 只能预览 loopback 应用。
+- 预览使用独立的 loopback origin，原站 cookie / localStorage 不会带过来；
+  依赖已有登录态的应用可能显示不完整。
 - 关闭 shadow root 内部、跨域 iframe 内部的元素无法点选。
-- 需要重启 DSH 才能加载新安装/更新后的插件。
+- 安装或升级后需要重启 DSH（至少刷新页面）才能加载新插件。
 
 ## 开发
 
