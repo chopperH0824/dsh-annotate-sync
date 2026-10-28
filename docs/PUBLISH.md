@@ -22,11 +22,11 @@ npm run pack:check   # 确认打包内容
 cd dsh-annotate-sync
 git init
 git add -A
-git commit -m "feat: dsh-annotate-sync 1.0.0 — full annotation plugin for DeepSeek Harness"
+git commit -m "feat: dsh-annotate-sync 2.0.0 — in-place HTML document annotation"
 git branch -M main
 git remote add origin git@github.com:<your-account>/dsh-annotate-sync.git
 git push -u origin main
-git tag v1.0.0
+git tag v2.0.0
 git push --tags
 ```
 
@@ -41,7 +41,8 @@ git push --tags
 
 ## 2. 发布到 npm
 
-> 状态：`dsh-annotate-sync@1.0.0` 已发布（2026-10-28），npm 页：
+> 状态：`dsh-annotate-sync@1.0.0` 已发布；`2.0.0` 已暂存待指纹批准
+> （stage id `4fb03119-4753-4540-ab6d-6d92a8ebe393`），npm 页：
 > https://www.npmjs.com/package/dsh-annotate-sync
 
 当前 npm 账号只配置了**安全密钥 / 指纹**，没有 TOTP 验证器。npm 已不再允许新配
@@ -71,7 +72,7 @@ npx -y npm@12.2.1 stage approve <stage-id>
 对方装好后**完全退出并重启 DSH**：
 
 ```bash
-dsh plugin --profile desktop add dsh-annotate-sync@1.0.0
+dsh plugin --profile desktop add dsh-annotate-sync@2.0.0
 # 把 dsh-annotate-sync 加入 profile package.json 的 dsh.profile.bundles
 ```
 
@@ -79,8 +80,8 @@ dsh plugin --profile desktop add dsh-annotate-sync@1.0.0
 
 ```bash
 npm pack
-# 把 dsh-annotate-sync-1.0.0.tgz 发给对方
-dsh plugin --profile desktop add /path/to/dsh-annotate-sync-1.0.0.tgz
+# 把 dsh-annotate-sync-2.0.0.tgz 发给对方
+dsh plugin --profile desktop add /path/to/dsh-annotate-sync-2.0.0.tgz
 ```
 
 ## 4. 安装后的验收清单
