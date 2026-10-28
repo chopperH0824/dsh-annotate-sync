@@ -1,0 +1,21 @@
+# dsh-annotate-sync — bundle patch layer.
+# Any profile whose dsh.profile.bundles lists this package activates this layer.
+# Every value below is a Config field read by lib/index.js.
+- insert:
+    - id: annotate-sync
+      name: dsh-annotate-sync
+      config:
+        # 批注落盘目录；~ 展开为当前用户主目录。
+        dir: ~/.dsh/annotate-sync
+        # 宿主 API 与静态资源前缀，插件内部使用，通常无需修改。
+        route: /__dsh-annotate-sync
+        # 旧版同步桥路由，供已接入的外部页面继续使用；设为空字符串可关闭。
+        legacyRoute: /api/annotate-sync/annotations
+        # 单次请求体上限（字节）。
+        maxBodyBytes: 262144
+        # 是否注册模型工具（read_annotations / set_annotation_status / clear_annotations）。
+        tool: true
+        # 是否启用“本地服务预览 + 页面内点选”闭环。
+        preview: true
+        # 额外探测的开发服务器端口（常见端口内置）。
+        ports: []

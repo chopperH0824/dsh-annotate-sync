@@ -1,0 +1,82 @@
+{
+  "name": "dsh-annotate-sync",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 页面批注插件：在侧边栏打开本地应用预览，点选元素写批注，批注按页面分组持久化，并支持一键发送到对话与 read_annotations 工具读取。Visual UI annotation plugin for DeepSeek Harness: preview a local app in the right sidebar, pick elements, keep page-scoped annotations, send them to the conversation, and expose them to the agent through tools.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "types",
+    "locale",
+    "demo",
+    "docs/PROTOCOL.md",
+    "docs/PUBLISH.md",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "annotation",
+    "annotations",
+    "visual-feedback",
+    "devtools",
+    "标注",
+    "批注"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check lib/index.js && node --check lib/store.js && node --check lib/markdown.js && node --check lib/discover.js && node --check lib/preview.js && node --check lib/client.js && node --check lib/overlay.js",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-api-session-controller"
+      ],
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

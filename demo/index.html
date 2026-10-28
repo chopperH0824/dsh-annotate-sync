@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aurora Cloud — AI 算力控制台（页面批注演示）</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!--
+    本文件是一个普通的演示页面，本身不包含批注脚本。
+    在 DeepSeek Harness 的「批注」tab 中打开本页预览时，预览代理会注入
+    bootstrap 与 lib/overlay.js（点选、编号 pin、批注卡片都由 overlay 提供）。
+    直接用浏览器打开本页时不会出现任何覆盖层，这是预期行为。
+  -->
+  <div class="app-layout" id="app-root">
+    <!-- 顶部引导横幅 -->
+    <div class="demo-guide-banner" id="guide-banner">
+      <div class="guide-badge">页面批注演示</div>
+      <p class="guide-text">
+        先在 <code>dsh-annotate-sync</code> 目录启动静态服务器（例如
+        <code>python3 -m http.server -d demo 8080</code>），再到 DeepSeek Harness
+        右侧栏的<strong>「批注」</strong> tab 中输入 <code>http://127.0.0.1:8080</code>
+        打开预览。点击页面任意元素写下修改意见，批注会按页面保存在批注面板里，
+        也可以一键发送到对话。
+      </p>
+    </div>
+
+    <!-- 顶部导航栏 -->
+    <header class="top-navbar" id="main-navbar">
+      <div class="brand-logo" id="brand-logo">
+        <span class="logo-dot"></span>
+        <span class="brand-name">Aurora Cloud</span>
+        <span class="brand-tag">PRO v2.4</span>
+      </div>
+      <nav class="nav-links" id="nav-links">
+        <a href="#overview" class="nav-item active" data-section="overview">总览看板</a>
+        <a href="#clusters" class="nav-item" data-section="clusters">GPU 集群</a>
+        <a href="#deployments" class="nav-item" data-section="deployments">推理服务</a>
+        <a href="#billing" class="nav-item" data-section="billing">账单与配额</a>
+      </nav>
+      <div class="nav-actions" id="nav-actions">
+        <button class="btn btn-secondary" id="btn-docs">API 文档</button>
+        <button class="btn btn-primary" id="btn-deploy">+ 新建推理实例</button>
+      </div>
+    </header>
+
+    <!-- 主视觉 Hero 卡片 -->
+    <section class="hero-card" id="hero-section">
+      <div class="hero-content">
+        <span class="status-pill" id="cluster-status">● 亚太区 H200 集群运行正常</span>
+        <h1 class="hero-title" id="hero-title">Aurora 智算控制台</h1>
+        <p class="hero-subtitle" id="hero-subtitle">
+          实时监控多节点 GPU 利用率、Token 吞吐速率与成本分布。支持毫秒级弹性扩缩容与一键模型量化部署。
+        </p>
+        <div class="hero-buttons" id="hero-buttons">
+          <button class="btn btn-accent" id="btn-quick-test">立即发起压测</button>
+          <button class="btn btn-outline" id="btn-view-logs">查看实时监控日志</button>
+        </div>
+      </div>
+      <div class="hero-visual" id="hero-gauge">
+        <div class="gauge-ring">
+          <div class="gauge-inner">
+            <span class="gauge-value" id="gauge-number">94.2%</span>
+            <span class="gauge-label">集群综合负载</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 核心指标三栏卡片 -->
+    <section class="metrics-grid" id="metrics-section">
+      <article class="metric-card" id="metric-throughput">
+        <div class="metric-header">
+          <span class="metric-title">实时 Token 吞吐量</span>
+          <span class="metric-trend up" id="trend-throughput">+18.4%</span>
+        </div>
+        <div class="metric-value" id="val-throughput">48,920 <small>tok/s</small></div>
+        <p class="metric-desc">峰值出现在 10:15，主要由 Gemini-4 与 DeepSeek-V3.2 产生</p>
+      </article>
+
+      <article class="metric-card" id="metric-latency">
+        <div class="metric-header">
+          <span class="metric-title">首字响应延迟 (TTFT)</span>
+          <span class="metric-trend down" id="trend-latency">-42ms</span>
+        </div>
+        <div class="metric-value" id="val-latency">168 <small>ms</small></div>
+        <p class="metric-desc">P95 延迟保持在 240ms 以内，KV Cache 命中率 89%</p>
+      </article>
+
+      <article class="metric-card" id="metric-cost">
+        <div class="metric-header">
+          <span class="metric-title">今日预估算力消耗</span>
+          <span class="metric-trend warn" id="trend-cost">预算 76%</span>
+        </div>
+        <div class="metric-value" id="val-cost">$1,284.50</div>
+        <p class="metric-desc">闲时自动降配策略已为您节省约 $412.00</p>
+      </article>
+    </section>
+
+    <!-- 活跃模型实例表格 -->
+    <section class="panel-section" id="instances-panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title" id="table-title">活跃推理端点 (Active Endpoints)</h2>
+          <p class="panel-subtitle" id="table-subtitle">点击任意元素，试试添加一条修改批注</p>
+        </div>
+        <div class="panel-filters" id="table-filters">
+          <input type="text" class="search-input" id="endpoint-search" placeholder="搜索端点名称或模型..." />
+          <button class="btn btn-secondary" id="btn-refresh-table">刷新状态</button>
+        </div>
+      </div>
+
+      <table class="endpoints-table" id="endpoints-table">
+        <thead>
+          <tr>
+            <th>端点名称</th>
+            <th>绑定模型</th>
+            <th>GPU 规格</th>
+            <th>副本数</th>
+            <th>QPS / 吞吐</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr id="row-endpoint-1">
+            <td><strong>prod-deepseek-r2</strong></td>
+            <td><span class="model-tag">DeepSeek-R2-671B</span></td>
+            <td>8x NVIDIA H200</td>
+            <td>4 节点</td>
+            <td>142 req/s</td>
+            <td><span class="badge badge-success">运行中</span></td>
+            <td><button class="btn-table-action" data-endpoint="prod-deepseek-r2">扩缩容</button></td>
+          </tr>
+          <tr id="row-endpoint-2">
+            <td><strong>prod-gemini-argon</strong></td>
+            <td><span class="model-tag">Gemini-4-Argon</span></td>
+            <td>Vertex TPU v5p</td>
+            <td>自动弹性</td>
+            <td>98 req/s</td>
+            <td><span class="badge badge-success">运行中</span></td>
+            <td><button class="btn-table-action" data-endpoint="prod-gemini-argon">配置路由</button></td>
+          </tr>
+          <tr id="row-endpoint-3">
+            <td><strong>staging-vision-ocr</strong></td>
+            <td><span class="model-tag">Qwen3-VL-72B</span></td>
+            <td>4x NVIDIA A100</td>
+            <td>1 节点</td>
+            <td>19 req/s</td>
+            <td><span class="badge badge-warning">高负载预警</span></td>
+            <td><button class="btn-table-action" data-endpoint="staging-vision-ocr">升配显卡</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>
