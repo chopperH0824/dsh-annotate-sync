@@ -41,8 +41,7 @@ git push --tags
 
 ## 2. 发布到 npm
 
-> 状态：`dsh-annotate-sync@1.0.0` 已发布；`2.0.0` 已暂存待指纹批准
-> （stage id `4fb03119-4753-4540-ab6d-6d92a8ebe393`），npm 页：
+> 状态：`dsh-annotate-sync@2.0.0` 已正式发布（2026-10-28），npm 页：
 > https://www.npmjs.com/package/dsh-annotate-sync
 
 当前 npm 账号只配置了**安全密钥 / 指纹**，没有 TOTP 验证器。npm 已不再允许新配
