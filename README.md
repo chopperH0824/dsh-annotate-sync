@@ -1,125 +1,153 @@
 # dsh-annotate-sync
 
-> A complete visual-annotation plugin for **DeepSeek Harness**: open a local app in the
-> right sidebar, click elements, leave notes, keep them grouped by page, send them to
-> the conversation, and let the agent read them through tools.
+> Open an HTML preview in DeepSeek Harness and the annotation overlay is already there.
+> Pick elements, write notes, hand the batch to the agent, and the agent edits the
+> source file by path. No server, no `<script>` tag, no target picker.
 
-Unlike a sync-bridge-only plugin, the annotation UI is part of this package: the
-right-sidebar panel, the loopback preview proxy, the injected in-page overlay, the
-annotation store and the model tools all ship together. No manual `<script>` tag is
-needed in your app.
+![icon](./icon.svg)
 
-- Right-sidebar **Annotations** tab (`⌘/Ctrl + Shift + B`)
-- Auto-discovers local dev servers (Vite, Next, CRA, static servers, common ports)
-- One isolated loopback preview origin per app, so root-absolute assets and SPA routes work
-- In-page picking: hover highlight, click-to-comment, numbered pins that follow scrolling,
-  resizing and layout shifts
-- Annotation workflow: `pending` / `applied`, grouped and filtered by page, edit, delete,
-  reorder, clear
-- **Send annotations** as one structured message to the current conversation, or
-  **add to composer** and add your own context first
-- Model tools: `read_annotations`, `set_annotation_status`, `clear_annotations`
-- Persistence at `~/.dsh/annotate-sync/annotations.json` plus readable `annotations.md`
-- Legacy `/api/annotate-sync/annotations` sync bridge is kept for already-wired pages
+## What it is
+
+A DeepSeek Harness plugin that takes over `.html` / `.htm` document previews:
+
+- open any HTML file in the right-sidebar **Files** panel (including one the agent just
+  generated) and the **点选批注 / Mark** overlay appears automatically;
+- hover highlight, click an element, write a note; numbered pins follow scrolling,
+  resizing and layout changes;
+- annotations are saved **per file**, with selector, sampled text, computed styles and
+  the change instruction;
+- leave picking with `Esc`, or press **Send to Agent**, and the batch goes into the
+  current conversation as one structured message;
+- the agent calls `read_annotations`, receives **file path + selector + note**, and edits
+  that HTML/CSS directly;
+- after the file changes the preview rebuilds; annotations stay; the agent can call
+  `set_annotation_status` when done.
+
+The old Agentation demo experience is preserved, without manually adding
+`agentation.js`, without the 8765 sync server, and without a local-service list to pick.
 
 ## Install
 
-### From npm
-
-> Published: https://www.npmjs.com/package/dsh-annotate-sync
-
 ```bash
-dsh plugin --profile desktop add dsh-annotate-sync@1.0.0
+# bundled CLI (macOS Desktop)
+"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" \
+  plugin --profile desktop add dsh-annotate-sync@2.0.0
 ```
 
 Add `"dsh-annotate-sync"` to `dsh.profile.bundles` in
-`~/.dsh/profiles/desktop/package.json` (or enable it in DSH Settings → Plugins),
-then **fully quit and restart DeepSeek Harness**.
+`~/.dsh/profiles/desktop/package.json`, then **fully quit and restart DeepSeek Harness**.
 
-### From a local folder or tarball
+Local development / tarball:
 
 ```bash
-dsh plugin --profile desktop add link:/absolute/path/to/dsh-annotate-sync
-# or: npm pack && dsh plugin --profile desktop add /path/to/dsh-annotate-sync-1.0.0.tgz
+npm pack
+dsh plugin --profile desktop add /absolute/path/to/dsh-annotate-sync-2.0.0.tgz
 ```
-
-Add the package to `dsh.profile.bundles` and restart.
 
 ## Use
 
-1. Start the app you are working on, e.g. `npm run dev` (Vite: `http://127.0.0.1:5173`).
-2. Open **Annotations** in the right sidebar, or press `⌘/Ctrl + Shift + B`.
-3. Pick the running service from the list; it opens in the panel.
-4. Click **Mark** (toolbar) or the floating button in the page, click an element, write
-   a note, press `Enter` to save.
-5. Filter, edit, mark applied, delete or reorder notes in the list.
-6. **Send annotations** puts the pending notes into the conversation as one structured
-   block; **Add to composer** merges them into your draft instead.
-7. Say "apply my annotations" and the agent calls `read_annotations` to get the list.
+1. Restart DSH.
+2. Open any `.html` file from the right-sidebar **Files** panel — or open the bundled
+   [`demo/index.html`](./demo/index.html) to try it.
+3. The floating **点选批注 / Mark** button appears in the preview; click it and then
+   click an element.
+4. Write the note and press `Enter`; `Esc` leaves picking.
+5. **Auto-send** is on by default: leaving picking sends the batch into the current
+   conversation. You can also press **Send to Agent** at any time, or turn auto-send off.
+6. The agent reads the annotations and edits the source file; the preview refreshes when
+   the file changes.
+7. If the agent does not mark them, say "apply my annotations" so it calls
+   `read_annotations`.
 
-### Bundled demo
+The toolbar above the preview shows the file name, pending count, send, auto-send and
+clear.
 
-```bash
-python3 -m http.server 4173 -d demo
+## Annotation data
+
+```jsonc
+{
+  "id": "uuid",
+  "page": {
+    "url": "dsh-resource://file/session/<sessionId>/<encoded path>",
+    "origin": "",
+    "path": "demo/index.html",
+    "title": "index.html"
+  },
+  "file": { "sessionId": "...", "path": "demo/index.html", "name": "index.html", "address": "dsh-resource://..." },
+  "selector": "#hero-title",
+  "tag": "h1",
+  "className": "hero-title",
+  "textSample": "Simple pricing",
+  "styles": { "fontSize": "26px", "color": "rgb(15,23,42)", "backgroundColor": "rgba(0,0,0,0)" },
+  "rect": { "x": 120, "y": 340, "w": 420, "h": 32 },
+  "note": "Make the title shorter",
+  "status": "pending",
+  "order": 0,
+  "createdAt": "ISO",
+  "updatedAt": "ISO"
+}
 ```
 
-Then open `http://127.0.0.1:4173` from the Annotations panel.
-
-## Configuration
-
-The `config` block in `cordis.patch.yml` (override per row):
-
-| Field | Default | Purpose |
-|---|---|---|
-| `dir` | `~/.dsh/annotate-sync` | annotation storage directory |
-| `route` | `/__dsh-annotate-sync` | internal API/asset prefix |
-| `legacyRoute` | `/api/annotate-sync/annotations` | old sync bridge; empty string disables |
-| `maxBodyBytes` | `262144` | request body cap |
-| `tool` | `true` | register the model tools |
-| `preview` | `true` | enable service detection + in-page picking |
-| `ports` | `[]` | extra ports to probe |
+Store: `~/.dsh/annotate-sync/annotations.json` plus readable `annotations.md`.
+Legacy v0/v1/v2 files migrate to v3 automatically; old HTTP-page annotations remain
+readable.
 
 ## Model tools
 
 | Tool | Purpose |
 |---|---|
-| `read_annotations({ status?, pageUrl?, includeDone? })` | Read annotations; `pending` by default; returns `markdown` and the structured array |
-| `set_annotation_status({ ids?, status, all?, pageUrl? })` | Mark applied (or back to pending) after editing code |
-| `clear_annotations({ pageUrl? })` | Clear all, optionally scoped to a page |
+| `read_annotations({ status?, pageUrl?, includeDone? })` | Read annotations; pending by default; Markdown includes `文件：<path>` per file |
+| `set_annotation_status({ ids?, status, all?, pageUrl? })` | Mark applied (or back to pending) after editing |
+| `clear_annotations({ pageUrl? })` | Clear all, optionally per file |
 
-## Data format
+## Configuration
 
-See [docs/PROTOCOL.md](./docs/PROTOCOL.md). The store is versioned and migrates the
-previous `annotations.json` shapes automatically.
+`config` in `cordis.patch.yml`:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `dir` | `~/.dsh/annotate-sync` | annotation storage directory |
+| `route` | `/__dsh-annotate-sync` | internal API/overlay prefix |
+| `legacyRoute` | `/api/annotate-sync/annotations` | old sync bridge; empty disables |
+| `maxBodyBytes` | `262144` | request body cap |
+| `tool` | `true` | register the model tools |
 
 ## Architecture
 
 ```
 DSH Web
-├─ Client half (lib/client.js)   right-sidebar tab + preview iframe + list + send
-├─ Host half  (lib/index.js)     routes / store / tools / discovery / preview proxy
-└─ Overlay    (lib/overlay.js)   injected into the previewed page: pick, pins, cards
+└─ Client: custom HTML document-preview renderer (priority: external)
+   ├─ reuses the builtin bytes-complete renderer + relative CSS/JS packing + opaque blob iframe
+   ├─ injects window.__DSH_ANNOTATE__ + overlay.js
+   ├─ toolbar: send / auto-send / clear
+   └─ postMessage bridge: overlay ↔ document component
+Host: routes + v3 annotation store + three model tools
+Overlay: picking, pins, comment cards, status
 ```
 
-- Preview: an ephemeral `127.0.0.1:<random>` proxy per target app; HTML responses get the
-  overlay + bootstrap injected, so the app keeps its own paths.
-- Security: loopback targets only; the harness origin itself is refused; annotations are
-  written only inside the plugin directory.
-- Transport: panel ↔ overlay via `postMessage` (strict origin check), panel ↔ host via a
-  JSON API.
+- The iframe stays `sandbox="allow-scripts"` with an opaque origin; the overlay and the
+  document component only exchange `postMessage`; the parent validates `event.source`
+  plus the channel.
+- Relative CSS/JS are read through DSH's workspaceFiles and packed into the blob, same as
+  the builtin preview.
+- No extra HTTP server is started and no network requests are injected into the page.
 
 ## Known limitations
 
-- Chromium is the validated browser.
-- The preview proxy does not relay WebSocket upgrades: pages load fine, but a dev
-  server's HMR socket still talks to its own origin (refresh to see changes).
-- Loopback apps only.
-- The preview runs on an isolated loopback origin, so the app's own cookies and
-  localStorage are not carried over; apps that require an existing login session
-  may not render correctly.
-- Elements inside closed shadow roots or cross-origin iframes cannot be picked.
-- A DSH restart (or at least a page reload) is required after installing or
-  upgrading the plugin.
+- A page CSP that blocks external scripts also blocks the overlay; the preview itself
+  still renders.
+- The custom renderer always allows the page's own scripts (the overlay needs them); it
+  is not gated by the builtin interactive-preview setting.
+- Elements inside cross-origin iframes or closed shadow roots cannot be picked.
+- Only `.html` / `.htm` are taken over; other document types keep the builtin preview.
+- Pins rely on CSS selectors and geometry; large DOM changes can misplace a pin, while
+  the note and file path remain.
+
+## Upgrading from 1.x
+
+v2 removes the local-service preview and the right-sidebar annotation panel. The old
+`annotations.json` migrates; the legacy `/api/annotate-sync/annotations` bridge stays.
+`sync-server.mjs` is no longer needed.
 
 ## Development
 
@@ -133,4 +161,4 @@ Protocol: [docs/PROTOCOL.md](./docs/PROTOCOL.md) · Publishing: [docs/PUBLISH.md
 
 ## License
 
-MIT
+MIT. The HTML renderer is adapted from DeepSeek Harness (MIT); see [NOTICE](./NOTICE).

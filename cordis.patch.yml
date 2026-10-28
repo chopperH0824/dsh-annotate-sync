@@ -15,7 +15,3 @@
         maxBodyBytes: 262144
         # 是否注册模型工具（read_annotations / set_annotation_status / clear_annotations）。
         tool: true
-        # 是否启用“本地服务预览 + 页面内点选”闭环。
-        preview: true
-        # 额外探测的开发服务器端口（常见端口内置）。
-        ports: []

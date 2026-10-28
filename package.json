@@ -1,7 +1,7 @@
 {
   "name": "dsh-annotate-sync",
-  "version": "1.0.1",
-  "description": "DeepSeek Harness 页面批注插件：在侧边栏打开本地应用预览，点选元素写批注，批注按页面分组持久化，并支持一键发送到对话与 read_annotations 工具读取。Visual UI annotation plugin for DeepSeek Harness: preview a local app in the right sidebar, pick elements, keep page-scoped annotations, send them to the conversation, and expose them to the agent through tools.",
+  "version": "2.0.0",
+  "description": "DeepSeek Harness HTML 文档预览就地批注插件：打开任意 HTML 预览即出现点选批注浮层，批注按文件保存，可整批发送给当前对话的 Agent，并通过 read_annotations 工具让 Agent 直接定位并修改源文件。In-place HTML document annotation for DeepSeek Harness: the overlay appears automatically in the document preview, annotations are saved per file, sent to the current conversation, and exposed to the agent through tools.",
   "type": "module",
   "license": "MIT",
   "author": "chopperH0824",
@@ -37,6 +37,7 @@
     "docs/PUBLISH.md",
     "cordis.patch.yml",
     "icon.svg",
+    "NOTICE",
     "README.md",
     "README.zh-CN.md",
     "CHANGELOG.md",
@@ -48,6 +49,8 @@
     "dsh-plugin",
     "annotation",
     "annotations",
+    "html",
+    "document-preview",
     "visual-feedback",
     "devtools",
     "标注",
@@ -69,7 +72,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check lib/index.js && node --check lib/store.js && node --check lib/markdown.js && node --check lib/discover.js && node --check lib/preview.js && node --check lib/client.js && node --check lib/overlay.js",
+    "check": "node --check lib/index.js && node --check lib/store.js && node --check lib/markdown.js && node --check lib/api.js && node --check lib/client.js && node --check lib/overlay.js",
     "pack:check": "npm pack --dry-run"
   },
   "dsh": {
@@ -82,6 +85,7 @@
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview",
         "@deepseek-ai/dsh-api-session-controller"
       ],
       "platform": "web",

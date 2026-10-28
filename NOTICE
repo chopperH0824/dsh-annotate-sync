@@ -1,0 +1,16 @@
+# NOTICE
+
+dsh-annotate-sync is MIT licensed (see LICENSE).
+
+The HTML document-preview renderer in `lib/client.js` is adapted from
+`@deepseek-ai/dsh-client-ui-sidebar-documentpreview`, part of DeepSeek Harness:
+
+    MIT License
+    Copyright (c) 2026 DeepSeek
+
+The adapted portions are the HTML packaging helpers (`packHtml`,
+`createHtmlDocument`, relative-asset reading), the `dsh-resource://file/...`
+address helpers, and the blob/iframe preview pattern. They have been modified to
+inject the annotation overlay, a toolbar, and host-API synchronization.
+
+DeepSeek Harness: https://github.com/deepseek-ai/deepseek-harness

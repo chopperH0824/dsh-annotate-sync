@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "页面批注",
-    "description": "在右侧栏预览本地应用，点选元素写批注，按页面分组保存，可一键发送到对话或由模型通过工具读取。"
+    "title": "HTML 文档批注",
+    "description": "在 DeepSeek Harness 的 HTML 文档预览里自动出现点选批注浮层：按文件保存批注，可整批发送到当前对话，由 Agent 直接修改源文件。"
   }
 }

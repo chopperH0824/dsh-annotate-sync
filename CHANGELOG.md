@@ -4,7 +4,53 @@ All notable changes to `dsh-annotate-sync` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.1] — 2026-10-28
+## [2.0.0] — 2026-10-28
+
+Complete redesign: annotate the HTML document that is already open in the DSH
+document preview, instead of managing local dev servers.
+
+### Added
+
+- An **external-band HTML document preview implementation** (`dsh-annotate-sync/html`)
+  that takes over `.html` / `.htm` previews and injects the annotation overlay
+  automatically. Opening an HTML file is now the only action needed.
+- The overlay receives the document's `dsh-resource://file/...` address, so every
+  annotation carries the exact file path, session id and selector.
+- The document preview's relative CSS/JS packing, opaque `allow-scripts` iframe and
+  resource tracking are preserved; the overlay is injected into the same packed
+  document.
+- Compact toolbar above the preview: file name, pending count, **发送给 Agent**,
+  **自动发送** (default on), and **清空**.
+- Batch handoff: annotations are stored immediately, and the batch is sent to the
+  current conversation when the user leaves picking mode (with auto-send on) or
+  presses the send button.
+- File-scoped store (`replacePage`) and `saveFile` host API; Markdown now prints
+  `文件：<path>` so the agent can edit the source file directly.
+- `NOTICE` with the MIT attribution for the adapted DSH HTML renderer helpers.
+
+### Changed
+
+- The store schema is v3; legacy v0/v1/v2 annotation files migrate automatically.
+  HTTP-page annotations from v1 remain readable.
+- The model tools keep their names, but `read_annotations` Markdown is file-oriented.
+
+### Removed
+
+- The local-service discovery panel, loopback preview proxy, right-sidebar tab,
+  composer dock chip, sidebar footer action and first-run auto-open from 1.0.x.
+- `lib/preview.js`, `lib/discover.js` and their tests.
+- Config fields `preview` and `ports`.
+
+### Known limitations
+
+- The custom HTML renderer always allows the document's own scripts (required for
+  the overlay). Unlike the built-in preview it is not gated by the developer-tools
+  interactive-preview setting.
+- Cross-origin iframes and closed shadow roots inside the HTML cannot be picked.
+- A page with a strict CSP that blocks our overlay script will not show the
+  annotation UI; the preview still renders.
+
+## [1.0.1] — 2026-10-28 (staged, superseded by 2.0.0)
 
 Discovery fix: the plugin was active but its only entry was the right-sidebar tab,
 which is invisible while that column is collapsed.

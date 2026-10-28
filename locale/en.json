@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Annotations",
-    "description": "Preview a local app in the right sidebar, click elements to leave notes, keep notes grouped by page, and send them to the conversation or to the agent."
+    "title": "HTML Annotations",
+    "description": "Annotation overlay for HTML documents opened in the DeepSeek Harness preview: pick elements, leave notes per file, send a batch to the conversation, and let the agent apply the changes to the source file."
   }
 }

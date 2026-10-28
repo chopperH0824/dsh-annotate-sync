@@ -1,145 +1,136 @@
-# dsh-annotate-sync · 页面批注插件
+# dsh-annotate-sync · HTML 文档就地批注
 
-> 在 DeepSeek Harness 右侧栏打开你正在开发的本地应用，点选页面元素写批注，
-> 批注按页面分组保存，可一键发送到对话，也能被模型通过工具直接读取。
-
-这是一个**完整闭环**的 DSH 插件：标注前端（页面内浮层）、预览代理、同步服务、
-批注存储和模型工具都在同一个 npm 包里，安装后不需要再手工往页面里加 `<script>`。
-
-- 右侧栏 **批注** 面板（`⌘/Ctrl + Shift + B`）
-- 自动发现本地开发服务器（Vite / Next / CRA / 静态服务器等常见端口）
-- 每个应用一个隔离的 loopback 预览 origin，root-absolute 资源、SPA 路由都能正常工作
-- 页面内点选：悬停高亮、点击写批注、编号 Pin 跟随滚动/缩放/布局变化
-- 批注状态：`待处理` / `已处理`，按页面分组、筛选、编辑、删除、排序、清空
-- **发送批注**：把待处理批注合并成一条结构化消息发进当前对话
-- **加入输入框**：合并进草稿，自己补充上下文再发
-- 模型工具：`read_annotations` / `set_annotation_status` / `clear_annotations`
-- 落盘：`~/.dsh/annotate-sync/annotations.json` + 人类可读的 `annotations.md`
-- 旧版同步桥 `/api/annotate-sync/annotations` 仍然保留，已接入的老页面不用改
+> 打开一个 HTML 预览，批注浮层就在页面里；点选元素写批注，整批交给 Agent，
+> Agent 按文件路径直接改源码。不需要起服务，不需要加 `<script>`，不需要选目标。
 
 ![icon](./icon.svg)
 
+## 这是什么
+
+一个 DeepSeek Harness 插件，接管 `.html` / `.htm` 的文档预览：
+
+- 在 DSH 右侧 **Files** 里打开任意 HTML（包括 Agent 刚生成的），预览里自动出现
+  **「点选批注」** 浮层；
+- 悬停高亮，点击元素写批注，编号 Pin 跟随滚动/缩放/布局变化；
+- 批注按 **文件路径** 保存，带 selector、当前文本、计算样式和修改指令；
+- 退出点选（`Esc`）或点 **发送给 Agent**，整批作为一条结构化消息进入当前对话；
+- Agent 调 `read_annotations` 拿到 **文件路径 + selector + 备注**，直接改那个 HTML/CSS；
+- 文件变化后预览自动重建，批注仍在；Agent 改完可 `set_annotation_status` 标记已处理。
+
+之前 Agentation demo 的体验保留了下来，但不再需要手工引入 `agentation.js`、不再需要
+8765 同步服务，也没有“本地服务列表”要先选。
+
 ## 安装
-
-### 从 npm 安装
-
-> 已发布：https://www.npmjs.com/package/dsh-annotate-sync
 
 ```bash
 # macOS Desktop 自带 CLI
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" \
-  plugin --profile desktop add dsh-annotate-sync@1.0.0
+  plugin --profile desktop add dsh-annotate-sync@2.0.0
 ```
 
-然后把 `"dsh-annotate-sync"` 加入 `~/.dsh/profiles/desktop/package.json` 的
-`dsh.profile.bundles` 数组（或在 DSH 设置 → 插件 中启用它），**完全退出并重启
-DeepSeek Harness**。
+把 `"dsh-annotate-sync"` 加入 `~/.dsh/profiles/desktop/package.json` 的
+`dsh.profile.bundles`，然后**完全退出并重启 DeepSeek Harness**。
 
-### 从本地目录安装（开发/分享 tarball）
-
-```bash
-dsh plugin --profile desktop add link:/absolute/path/to/dsh-annotate-sync
-# 同样把 dsh-annotate-sync 加入 dsh.profile.bundles，然后重启 DSH
-```
-
-分享给别人时也可以直接发 `npm pack` 生成的 `.tgz`：
+本地开发/分享 tarball：
 
 ```bash
-npm pack                     # 生成 dsh-annotate-sync-1.0.0.tgz
-dsh plugin --profile desktop add /path/to/dsh-annotate-sync-1.0.0.tgz
+npm pack
+dsh plugin --profile desktop add /absolute/path/to/dsh-annotate-sync-2.0.0.tgz
 ```
 
 ## 使用
 
-1. 先启动你要改的本地应用，例如 `npm run dev`（Vite 默认 `http://127.0.0.1:5173`）。
-2. 在 DSH 右侧栏打开 **批注**，或按 `⌘/Ctrl + Shift + B`。
-3. 列表里会出现正在运行的服务；点击它打开预览。
-4. 点工具栏的 **点选**（或页面右下角浮动按钮），点击任意元素，写批注，`Enter` 保存。
-5. 在面板的批注列表里可以筛选、编辑、标记已处理、删除、上下排序。
-6. 点 **发送批注**：待处理批注会作为一条消息进入当前对话；
-   也可以点 **加入输入框**，补充上下文后自己发送。
-7. 之后直接对模型说「按批注修改」，模型会调用 `read_annotations` 读取清单。
+1. 重启 DSH。
+2. 在右侧 **Files** 面板里打开任意 `.html` 文件（或直接打开包里的
+   [`demo/index.html`](./demo/index.html) 试一下）。
+3. 预览里右下角出现 **「点选批注」**；点它，然后点击页面元素。
+4. 写备注，`Enter` 保存；`Esc` 退出点选。
+5. 默认开启 **自动发送**：退出点选时，这一批批注会自动发进当前对话；
+   也可以随时点工具栏的 **发送给 Agent**，或关掉自动发送手动发。
+6. 之后 Agent 会读取批注并改源码；打开预览的文件变化后自动刷新。
+7. 如果 Agent 没有自动标记，直接说「按批注修改」，它会调用 `read_annotations`。
 
-### 内置演示页
+工具栏在预览上方：文件名、待处理数量、发送、自动发送、清空。
 
-不想动自己的项目时，可以用包里的 demo：
+## 批注数据
 
-```bash
-python3 -m http.server 4173 -d demo
+```jsonc
+{
+  "id": "uuid",
+  "page": {
+    "url": "dsh-resource://file/session/<sessionId>/<encoded path>",
+    "origin": "",
+    "path": "demo/index.html",
+    "title": "index.html"
+  },
+  "file": { "sessionId": "...", "path": "demo/index.html", "name": "index.html", "address": "dsh-resource://..." },
+  "selector": "#hero-title",
+  "tag": "h1",
+  "className": "hero-title",
+  "textSample": "把成本算清",
+  "styles": { "fontSize": "26px", "color": "rgb(15,23,42)", "backgroundColor": "rgba(0,0,0,0)" },
+  "rect": { "x": 120, "y": 340, "w": 420, "h": 32 },
+  "note": "把标题改短一点",
+  "status": "pending",
+  "order": 0,
+  "createdAt": "ISO",
+  "updatedAt": "ISO"
+}
 ```
 
-然后在 **批注** 面板里打开 `http://127.0.0.1:4173`。
-
-## 配置
-
-`cordis.patch.yml` 中的 `config` 字段（也可以在插件行覆盖）：
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `dir` | `~/.dsh/annotate-sync` | 批注落盘目录 |
-| `route` | `/__dsh-annotate-sync` | 插件内部 API/静态资源前缀 |
-| `legacyRoute` | `/api/annotate-sync/annotations` | 旧版同步桥；置空关闭 |
-| `maxBodyBytes` | `262144` | 单次请求体上限 |
-| `tool` | `true` | 是否注册 `read_annotations` 等工具 |
-| `preview` | `true` | 是否启用本地服务预览 + 页面内点选 |
-| `ports` | `[]` | 额外探测的端口 |
+落盘：`~/.dsh/annotate-sync/annotations.json` + 人类可读的 `annotations.md`。
+旧版 v0/v1/v2 文件自动迁移到 v3；旧 HTTP 页面批注仍可读取。
 
 ## 模型工具
 
 | 工具 | 作用 |
 |---|---|
-| `read_annotations({ status?, pageUrl?, includeDone? })` | 读取批注；默认只给 `pending`，返回 `markdown` 与结构化数组 |
+| `read_annotations({ status?, pageUrl?, includeDone? })` | 读取批注；默认只给 `pending`；Markdown 每组带 `文件：<path>` |
 | `set_annotation_status({ ids?, status, all?, pageUrl? })` | 改完后标记 `applied`（或退回 `pending`） |
-| `clear_annotations({ pageUrl? })` | 清空（可限定页面） |
+| `clear_annotations({ pageUrl? })` | 清空（可限定文件） |
 
-## 数据格式
+## 配置
 
-见 [docs/PROTOCOL.md](./docs/PROTOCOL.md)。简版：
+`cordis.patch.yml` 中的 `config`：
 
-```jsonc
-{
-  "version": 2,
-  "updatedAt": "2026-10-28T03:35:40.757Z",
-  "annotations": [{
-    "id": "uuid",
-    "page": { "url": "http://127.0.0.1:5173/pricing", "origin": "...", "path": "/pricing", "title": "Pricing" },
-    "selector": "main > section:nth-of-type(2) > h2",
-    "tag": "h2", "className": "section-title", "textSample": "Simple pricing",
-    "styles": { "fontSize": "26px", "color": "rgb(248, 250, 252)", "backgroundColor": "rgba(0, 0, 0, 0)" },
-    "rect": { "x": 120, "y": 340, "w": 420, "h": 32 },
-    "note": "把标题改成更短的文案",
-    "status": "pending", "order": 0,
-    "createdAt": "...", "updatedAt": "..."
-  }]
-}
-```
-
-旧版 `annotations.json`（纯数组或 `{annotations:[...]}`）会在首次读取时自动迁移。
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `dir` | `~/.dsh/annotate-sync` | 批注落盘目录 |
+| `route` | `/__dsh-annotate-sync` | 插件内部 API/overlay 前缀 |
+| `legacyRoute` | `/api/annotate-sync/annotations` | 旧版同步桥；置空关闭 |
+| `maxBodyBytes` | `262144` | 单次请求体上限 |
+| `tool` | `true` | 是否注册模型工具 |
 
 ## 架构
 
 ```
 DSH Web
-├─ Client half (lib/client.js)      右侧栏 Tab + 预览 iframe + 批注列表 + 发送
-├─ Host half  (lib/index.js)        路由 / store / 工具 / 服务探测 / 预览代理
-└─ Overlay    (lib/overlay.js)      注入到被预览页面：点选、Pin、批注卡片
+└─ Client: 自定义 HTML 文档预览 renderer（priority: external）
+   ├─ 复用内置 HTML 预览的 bytes-complete + 相对 CSS/JS 打包 + opaque blob iframe
+   ├─ 注入 window.__DSH_ANNOTATE__ + overlay.js
+   ├─ toolbar：发送 / 自动发送 / 清空
+   └─ postMessage 桥：overlay ↔ 文档组件
+Host: 路由 + v3 批注 store + 三个模型工具
+Overlay: 点选、Pin、批注卡片、状态
 ```
 
-- 预览：每个目标应用一个 `127.0.0.1:<随机端口>` 的 loopback 代理，HTML 响应注入
-  overlay 与 bootstrap；root-absolute 资源与 SPA 路由无需改写。
-- 安全：只接受 loopback 目标；代理拒绝 harness 自身；批注只写入插件目录。
-- 通信：panel ↔ overlay 用 `postMessage`（严格校验 origin），panel ↔ host 用 JSON API。
+- 预览 iframe 仍是 `sandbox="allow-scripts"` 的 opaque origin；overlay 与文档组件只通过
+  `postMessage` 通信，父侧校验 `event.source` + channel。
+- 相对 CSS/JS 由 DSH 的 workspaceFiles 读取并打包进 blob，和内置预览一致。
+- 不启动任何额外 HTTP 服务，不向被预览页面注入网络请求。
 
 ## 已知限制
 
-- Chromium 为验证过的浏览器。
-- 预览代理不转发 WebSocket upgrade：页面能正常加载，但 dev server 的 HMR socket
-  仍然直连它自己的 origin（热更新可能不可用，刷新即可）。
-- 只能预览 loopback 应用。
-- 预览使用独立的 loopback origin，原站 cookie / localStorage 不会带过来；
-  依赖已有登录态的应用可能显示不完整。
-- 关闭 shadow root 内部、跨域 iframe 内部的元素无法点选。
-- 安装或升级后需要重启 DSH（至少刷新页面）才能加载新插件。
+- 页面自带 CSP 且禁止外部脚本时，overlay 会被拦截；预览本身仍可用。
+- 自定义 renderer 总是允许页面脚本执行（overlay 需要），不受内置“交互式预览”开关控制。
+- 跨域 iframe、closed shadow root 内的元素无法点选。
+- 只接管 `.html` / `.htm`；其他文档类型仍用内置预览。
+- 批注定位依赖 CSS selector 与几何矩形；元素结构大改后可能定位不准，但备注和文件路径仍在。
+
+## 从 1.x 升级
+
+v2 移除了“本地服务预览 + 右侧栏批注面板”。旧的 `annotations.json` 会迁移；旧的
+`/api/annotate-sync/annotations` 同步桥仍保留。无需再启动 `sync-server.mjs`。
 
 ## 开发
 
@@ -149,9 +140,8 @@ npm run check     # node --check 所有运行时文件
 npm run pack:check
 ```
 
-协议契约：[docs/PROTOCOL.md](./docs/PROTOCOL.md)
-发布说明：[docs/PUBLISH.md](./docs/PUBLISH.md)
+协议契约：[docs/PROTOCOL.md](./docs/PROTOCOL.md) · 发布：[docs/PUBLISH.md](./docs/PUBLISH.md)
 
 ## License
 
-MIT
+MIT。HTML 渲染器部分改编自 DeepSeek Harness（MIT），见 [NOTICE](./NOTICE)。

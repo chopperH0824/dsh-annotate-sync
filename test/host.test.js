@@ -1,5 +1,6 @@
 /**
- * Hermetic host-half tests: store, Markdown, API dispatch and plugin wiring.
+ * Hermetic host-half tests (v2): store schema v3, file-scoped replacement,
+ * file-aware Markdown, the v2 HTTP API, plugin wiring and the model tools.
  *
  * No network, no dependencies, no writes outside OS temp dirs. Fake HTTP
  * request/response objects and a fake Cordis context keep this fast and stable.
@@ -12,14 +13,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import { createApiHandler, isLoopbackAddress } from "../lib/api.js";
+import { API_CODES, createApiHandler, isLoopbackAddress } from "../lib/api.js";
 import { apply, inject, name } from "../lib/index.js";
 import { buildMarkdown, EMPTY_MARKDOWN } from "../lib/markdown.js";
-import { createStore, normalizeAnnotation } from "../lib/store.js";
+import { createStore, normalizeAnnotation, STORE_VERSION } from "../lib/store.js";
 
-const PRICING_URL = "http://127.0.0.1:5173/pricing";
-const ABOUT_URL = "http://127.0.0.1:5173/about";
-const HARNESS_ORIGIN = "http://127.0.0.1:62605";
+const SESSION_ID = "session-1";
+const RESOURCE_A = `dsh-resource://file/session/${SESSION_ID}/src%2Findex.html`;
+const RESOURCE_B = `dsh-resource://file/session/${SESSION_ID}/about.html`;
+const LEGACY_URL = "http://127.0.0.1:5173/pricing";
 const API_PATH = "/__dsh-annotate-sync/api";
 const NOW = "2026-10-28T03:35:40.757Z";
 
@@ -41,24 +43,47 @@ async function writeStoreFile(dir, value) {
   await writeFile(join(dir, "annotations.json"), typeof value === "string" ? value : JSON.stringify(value));
 }
 
-/** Annotation fixture with the protocol shape. */
-function makeAnnotation(overrides = {}) {
-  const pageUrl = overrides.pageUrl ?? PRICING_URL;
-  const parsed = new URL(pageUrl);
-  const page = {
-    url: pageUrl,
-    origin: parsed.origin,
-    path: parsed.pathname,
-    title: overrides.pageTitle ?? (pageUrl === PRICING_URL ? "Pricing - Acme" : "About - Acme"),
-  };
+/** v2 file-backed annotation fixture. */
+function makeFileAnnotation(overrides = {}) {
+  const url = overrides.pageUrl ?? RESOURCE_A;
+  const filePath = overrides.filePath ?? "src/index.html";
+  const fileName = overrides.fileName ?? "index.html";
+  const pageTitle = overrides.pageTitle ?? "Acme 首页";
   return {
-    id: overrides.id ?? "annotation-1",
-    page,
-    selector: overrides.selector ?? "main > section:nth-of-type(2) > h2",
+    id: overrides.id ?? "file-1",
+    page: { url, origin: "", path: filePath, title: pageTitle },
+    file: { sessionId: SESSION_ID, path: filePath, name: fileName, address: url },
+    selector: overrides.selector ?? "#hero-title",
+    tag: "h1",
+    className: "hero-title",
+    textSample: "把成本算清",
+    styles: { fontSize: "26px", color: "rgb(15, 23, 42)", backgroundColor: "rgba(0, 0, 0, 0)" },
+    rect: { x: 120, y: 340, w: 420, h: 32 },
+    note: overrides.note ?? "把标题改短一点",
+    status: overrides.status ?? "pending",
+    order: overrides.order ?? 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+/** Legacy HTTP-page annotation fixture (no `file`). */
+function makeLegacyAnnotation(overrides = {}) {
+  const pageUrl = overrides.pageUrl ?? LEGACY_URL;
+  const parsed = new URL(pageUrl);
+  return {
+    id: overrides.id ?? "legacy-1",
+    page: {
+      url: pageUrl,
+      origin: parsed.origin,
+      path: parsed.pathname,
+      title: overrides.pageTitle ?? "Pricing - Acme",
+    },
+    selector: overrides.selector ?? "main > h2",
     tag: "h2",
     className: "section-title",
     textSample: "Simple pricing",
-    styles: { fontSize: "26px", color: "rgb(248, 250, 252)", backgroundColor: "rgba(0, 0, 0, 0)" },
+    styles: { fontSize: "26px", color: "rgb(248, 250, 252)", backgroundColor: "rgba(0,0,0,0)" },
     rect: { x: 120, y: 340, w: 420, h: 32 },
     note: overrides.note ?? "把标题改成更短的文案",
     status: overrides.status ?? "pending",
@@ -121,22 +146,25 @@ async function invoke(handler, options = {}) {
   const req = makeReq({ ...options, headers });
   const res = makeRes();
   await handler(req, res);
-  return {
-    status: res.statusCode,
-    headers: res.headers,
-    text: res.body(),
-    json: res.json(),
-  };
+  return { status: res.statusCode, headers: res.headers, text: res.body(), json: res.json() };
 }
 
 /** Invoke the JSON API envelope. */
 async function api(handler, method, args = {}, options = {}) {
-  return invoke(handler, {
-    method: "POST",
-    url: API_PATH,
-    body: { method, args },
-    ...options,
-  });
+  return invoke(handler, { method: "POST", url: API_PATH, body: { method, args }, ...options });
+}
+
+/** Read the persisted JSON store file. */
+async function readJson(dir) {
+  return JSON.parse(await readFile(join(dir, "annotations.json"), "utf-8"));
+}
+
+/** Store + API handler in a temp dir. */
+async function makeApiFixture(t, options = {}) {
+  const dir = await makeTempDir(t);
+  const store = createStore({ dir, log: options.log ?? quietLog() });
+  const handler = createApiHandler({ store, config: { maxBodyBytes: options.maxBodyBytes ?? 262144 }, log: quietLog() });
+  return { dir, store, handler };
 }
 
 /** Build a fake Cordis context recording route/tool/effect registrations. */
@@ -168,7 +196,7 @@ function makeCtx({ withTools = true, withWebServer = true } = {}) {
   if (withWebServer) {
     ctx.webServer = {
       getOrigin() {
-        return HARNESS_ORIGIN;
+        return "http://127.0.0.1:62605";
       },
       register(spec) {
         routes.push(spec);
@@ -192,62 +220,61 @@ function makeCtx({ withTools = true, withWebServer = true } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// store.normalize
+// store.normalize (v3)
 // ---------------------------------------------------------------------------
 
-test("normalizeAnnotation drops unusable records and applies contract defaults", () => {
+test("normalizeAnnotation keeps optional file metadata and the page.url group key", () => {
   assert.equal(normalizeAnnotation({ selector: "", note: "改", page: {} }, 0, NOW), null);
-  assert.equal(normalizeAnnotation({ selector: "h1", note: "", page: {} }, 0, NOW), null);
-  assert.equal(normalizeAnnotation({ selector: "   ", note: "   " }, 0, NOW), null);
+  assert.equal(normalizeAnnotation({ selector: "h1", note: "" }, 0, NOW), null);
   assert.equal(normalizeAnnotation(null, 0, NOW), null);
   assert.equal(normalizeAnnotation([], 0, NOW), null);
 
-  const normalized = normalizeAnnotation(
+  const file = normalizeAnnotation(
     {
       id: "keep-me",
-      page: { url: `${PRICING_URL}#hash`, title: "T".repeat(200) },
+      page: { url: `${RESOURCE_A}#hero`, path: "src/index.html" },
+      file: { sessionId: ` ${SESSION_ID} `, path: " src/index.html ", name: "index.html", address: RESOURCE_A },
       selector: "s".repeat(1200),
-      tag: "  h2 ",
+      note: "n".repeat(2100),
       className: "c".repeat(400),
       textSample: "t".repeat(200),
-      styles: { fontSize: "26px" },
-      rect: { x: 12, y: "bad" },
-      note: "n".repeat(2100),
       status: "something-else",
     },
     4,
     NOW,
   );
+  assert.equal(file.id, "keep-me");
+  assert.equal(file.selector.length, 1000);
+  assert.equal(file.note.length, 2000);
+  assert.equal(file.textSample.length, 160);
+  assert.equal(file.className.length, 300);
+  assert.equal(file.status, "pending");
+  assert.equal(file.order, 4);
+  assert.equal(file.page.url, RESOURCE_A);
+  assert.equal(file.page.origin, "", "dsh-resource URLs never invent an origin");
+  assert.equal(file.page.path, "src/index.html");
+  assert.deepEqual(file.file, {
+    sessionId: SESSION_ID,
+    path: "src/index.html",
+    name: "index.html",
+    address: RESOURCE_A,
+  });
 
-  assert.equal(normalized.id, "keep-me");
-  assert.equal(normalized.selector.length, 1000);
-  assert.equal(normalized.note.length, 2000);
-  assert.equal(normalized.textSample.length, 160);
-  assert.equal(normalized.className.length, 300);
-  assert.equal(normalized.page.title.length, 120);
-  assert.equal(normalized.page.url, PRICING_URL);
-  assert.equal(normalized.page.origin, "http://127.0.0.1:5173");
-  assert.equal(normalized.page.path, "/pricing");
-  assert.equal(normalized.status, "pending");
-  assert.equal(normalized.order, 4);
-  assert.equal(normalized.tag, "h2");
-  assert.equal(normalized.createdAt, NOW);
-  assert.equal(normalized.updatedAt, NOW);
-  assert.deepEqual(normalized.rect, { x: 12, y: 0, w: 0, h: 0 });
-  assert.deepEqual(normalized.styles, { fontSize: "26px", color: "", backgroundColor: "" });
+  const legacy = normalizeAnnotation({ selector: "h1", note: "改", page: { url: `${LEGACY_URL}#x` } }, 0, NOW);
+  assert.equal(legacy.page.url, LEGACY_URL);
+  assert.equal(legacy.page.origin, "http://127.0.0.1:5173");
+  assert.equal(legacy.page.path, "/pricing");
+  assert.equal(Object.prototype.hasOwnProperty.call(legacy, "file"), false, "legacy records keep no empty file block");
 
-  const generated = normalizeAnnotation({ selector: "h1", note: "改" }, 0, NOW);
-  assert.match(generated.id, /^[0-9a-f-]{36}$/);
-  assert.equal(generated.page.url, "unknown");
-  assert.equal(generated.page.origin, "");
-  assert.equal(generated.page.path, "");
+  const emptyFile = normalizeAnnotation({ selector: "h1", note: "改", file: {} }, 0, NOW);
+  assert.equal(Object.prototype.hasOwnProperty.call(emptyFile, "file"), false);
 });
 
 // ---------------------------------------------------------------------------
-// store migration
+// store migration -> v3
 // ---------------------------------------------------------------------------
 
-test("store migrates legacy array, legacy object and v2 files", async (t) => {
+test("store migrates v0 array, v1 object and v2 files to schema v3", async (t) => {
   const root = await makeTempDir(t);
 
   const legacyArrayDir = join(root, "legacy-array");
@@ -258,14 +285,14 @@ test("store migrates legacy array, legacy object and v2 files", async (t) => {
   assert.equal(list.length, 1);
   assert.equal(list[0].page.url, "unknown");
   assert.equal(list[0].status, "pending");
-  assert.equal(list[0].order, 0);
   assert.match(list[0].id, /^[0-9a-f-]{36}$/);
+  assert.equal((await readJson(legacyArrayDir)).version, 3, "v0 arrays are rewritten as v3");
 
   const legacyObjectDir = join(root, "legacy-object");
   await writeStoreFile(legacyObjectDir, {
     updatedAt: NOW,
     dir: "/old/place",
-    annotations: [makeAnnotation({ id: "old-1", status: "applied" })],
+    annotations: [makeLegacyAnnotation({ id: "old-1", status: "applied" })],
   });
   const legacyObject = createStore({ dir: legacyObjectDir, log: quietLog() });
   await legacyObject.ensureLoaded();
@@ -273,13 +300,23 @@ test("store migrates legacy array, legacy object and v2 files", async (t) => {
   assert.equal(list.length, 1);
   assert.equal(list[0].id, "old-1");
   assert.equal(list[0].status, "applied");
-  assert.equal(list[0].page.url, PRICING_URL);
+  assert.equal((await readJson(legacyObjectDir)).version, 3);
 
   const v2Dir = join(root, "v2");
-  await writeStoreFile(v2Dir, { version: 2, updatedAt: NOW, annotations: [makeAnnotation({ id: "v2-1" })] });
+  await writeStoreFile(v2Dir, { version: 2, updatedAt: NOW, annotations: [makeLegacyAnnotation({ id: "v2-1" })] });
   const v2 = createStore({ dir: v2Dir, log: quietLog() });
   await v2.ensureLoaded();
   assert.equal(v2.list().length, 1);
+  assert.equal((await readJson(v2Dir)).version, 3);
+
+  const v3Dir = join(root, "v3");
+  await writeStoreFile(v3Dir, { version: 3, updatedAt: NOW, annotations: [makeFileAnnotation({ id: "v3-1" })] });
+  const v3 = createStore({ dir: v3Dir, log: quietLog() });
+  await v3.ensureLoaded();
+  list = v3.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].file.path, "src/index.html");
+  assert.equal(list[0].page.url, RESOURCE_A);
 
   const brokenDir = join(root, "broken");
   await writeStoreFile(brokenDir, "{not json");
@@ -294,43 +331,124 @@ test("store migrates legacy array, legacy object and v2 files", async (t) => {
 });
 
 // ---------------------------------------------------------------------------
-// store mutations and persistence
+// store.replacePage: one file group only
 // ---------------------------------------------------------------------------
 
-test("store replace/status/reorder/remove/clear persist v2 JSON and Markdown", async (t) => {
+test("replacePage touches only the requested page.url group and merges the file key", async (t) => {
   const dir = await makeTempDir(t);
   const store = createStore({ dir, log: quietLog() });
 
-  const first = makeAnnotation({ id: "a", selector: "#first", order: 0 });
-  const second = makeAnnotation({ id: "b", selector: "#second", order: 1 });
-  const about = makeAnnotation({ id: "c", pageUrl: ABOUT_URL, selector: "#about", order: 0 });
-
-  const replaced = await store.replace([first, second, about]);
+  const replaced = await store.replace([
+    makeFileAnnotation({ id: "a1", order: 0 }),
+    makeFileAnnotation({ id: "b1", pageUrl: RESOURCE_B, filePath: "about.html", fileName: "about.html", order: 0 }),
+    makeLegacyAnnotation({ id: "legacy", order: 0 }),
+  ]);
   assert.equal(replaced.count, 3);
-  assert.match(replaced.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
 
-  const json = JSON.parse(await readFile(join(dir, "annotations.json"), "utf-8"));
-  assert.equal(json.version, 2);
-  assert.equal(json.annotations.length, 3);
-  assert.equal(typeof json.updatedAt, "string");
-
-  let list = store.list();
+  const saved = await store.replacePage(RESOURCE_A, [
+    makeFileAnnotation({ id: "a2", selector: "#new", order: 0 }),
+    makeFileAnnotation({ id: "a3", selector: "#newer", order: 1 }),
+  ]);
+  assert.equal(saved.count, 2);
+  assert.match(saved.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(
-    list.map((item) => item.id),
-    ["c", "a", "b"],
+    saved.annotations.map((item) => item.id),
+    ["a2", "a3"],
+  );
+  assert.ok(saved.annotations.every((item) => item.page.url === RESOURCE_A));
+
+  const list = store.list();
+  assert.deepEqual(
+    list.map((item) => item.id).sort(),
+    ["a2", "a3", "b1", "legacy"],
+    "other pages survive the file-scoped save",
+  );
+  assert.equal(list.find((item) => item.id === "b1").page.url, RESOURCE_B);
+  assert.equal(list.find((item) => item.id === "b1").file.path, "about.html");
+
+  // Missing page.url is forced onto the group key; a mismatched page.url cannot
+  // move a document's annotations into a different file group.
+  const noPage = makeFileAnnotation({ id: "forced", selector: "#forced" });
+  delete noPage.page;
+  const mismatched = makeFileAnnotation({ id: "mismatch", pageUrl: RESOURCE_B, filePath: "about.html" });
+  const forced = await store.replacePage(RESOURCE_A, [noPage, mismatched]);
+  assert.deepEqual(
+    forced.annotations.map((item) => item.id),
+    ["forced", "mismatch"],
+  );
+  assert.ok(forced.annotations.every((item) => item.page.url === RESOURCE_A));
+  assert.deepEqual(forced.annotations[0].file, {
+    sessionId: SESSION_ID,
+    path: "src/index.html",
+    name: "index.html",
+    address: RESOURCE_A,
+  });
+  assert.equal(
+    store.list().filter((item) => item.page.url === RESOURCE_B).length,
+    1,
+    "the other file group is untouched",
   );
 
-  const pages = store.pages();
-  assert.equal(pages.length, 2);
-  const pricingPage = pages.find((page) => page.url === PRICING_URL);
-  assert.deepEqual(pricingPage, {
-    url: PRICING_URL,
-    origin: "http://127.0.0.1:5173",
-    path: "/pricing",
-    title: "Pricing - Acme",
-    count: 2,
-    pending: 2,
+  // An explicit page.path wins over the address-derived path.
+  const nested = await store.replacePage(RESOURCE_A, [
+    { id: "nested", selector: "#nested", note: "改一下", page: { path: "nested/page.html" } },
+  ]);
+  assert.equal(nested.annotations[0].file.path, "nested/page.html");
+  assert.equal(nested.annotations[0].file.name, "page.html");
+  assert.equal(nested.annotations[0].file.sessionId, SESSION_ID);
+
+  // An empty array clears exactly one group.
+  assert.equal((await store.replacePage(RESOURCE_A, [])).count, 0);
+  assert.equal(store.list().filter((item) => item.page.url === RESOURCE_A).length, 0);
+  assert.equal(store.list().filter((item) => item.page.url === RESOURCE_B).length, 1);
+
+  const disk = await readJson(dir);
+  assert.equal(disk.version, 3);
+  assert.equal(disk.annotations.length, 2);
+
+  assert.deepEqual(store.filePaths, {
+    dir,
+    json: join(dir, "annotations.json"),
+    markdown: join(dir, "annotations.md"),
   });
+});
+
+// ---------------------------------------------------------------------------
+// store mutations and persistence
+// ---------------------------------------------------------------------------
+
+test("store replace/status/reorder/remove/clear persist v3 JSON and Markdown", async (t) => {
+  const dir = await makeTempDir(t);
+  const store = createStore({ dir, log: quietLog() });
+
+  const first = makeFileAnnotation({ id: "a", order: 0 });
+  const second = makeFileAnnotation({ id: "b", order: 1 });
+  const other = makeFileAnnotation({
+    id: "c",
+    pageUrl: RESOURCE_B,
+    filePath: "about.html",
+    fileName: "about.html",
+    order: 0,
+  });
+  const legacy = makeLegacyAnnotation({ id: "d", order: 0 });
+
+  const replaced = await store.replace([first, second, other, legacy]);
+  assert.equal(replaced.count, 4);
+
+  const json = await readJson(dir);
+  assert.equal(json.version, STORE_VERSION);
+  assert.equal(json.annotations.length, 4);
+  assert.equal(typeof json.updatedAt, "string");
+
+  const pages = store.pages();
+  assert.equal(pages.length, 3);
+  const pageA = pages.find((page) => page.url === RESOURCE_A);
+  assert.equal(pageA.count, 2);
+  assert.equal(pageA.pending, 2);
+  assert.equal(pageA.file.path, "src/index.html");
+  assert.equal(pageA.file.name, "index.html");
+  const legacyPage = pages.find((page) => page.url === LEGACY_URL);
+  assert.equal(legacyPage.file, undefined, "legacy pages have no file block");
 
   const updated = await store.setStatus("a", "applied");
   assert.equal(updated.status, "applied");
@@ -338,62 +456,87 @@ test("store replace/status/reorder/remove/clear persist v2 JSON and Markdown", a
 
   const md = await readFile(join(dir, "annotations.md"), "utf-8");
   assert.match(md, /已处理/);
-  assert.match(md, /把标题改成更短的文案/);
+  assert.match(md, /文件：`src\/index\.html`/);
 
-  const reordered = await store.reorder(PRICING_URL, ["b", "a"]);
-  const pricing = reordered.filter((item) => item.page.url === PRICING_URL);
+  const reordered = await store.reorder(RESOURCE_A, ["b", "a"]);
+  const pageAItems = reordered.filter((item) => item.page.url === RESOURCE_A);
   assert.deepEqual(
-    pricing.map((item) => item.id),
+    pageAItems.map((item) => item.id),
     ["b", "a"],
   );
   assert.deepEqual(
-    pricing.map((item) => item.order),
+    pageAItems.map((item) => item.order),
     [0, 1],
   );
 
   assert.equal(await store.remove("c"), true);
   assert.equal(await store.remove("c"), false);
-  assert.equal(store.list().length, 2);
+  assert.equal(store.list().length, 3);
 
-  assert.equal(await store.clear(PRICING_URL), 2);
+  assert.equal(await store.clear(RESOURCE_A), 2);
+  assert.equal(store.list().length, 1);
+  assert.equal(await store.clear(), 1);
   assert.deepEqual(store.list(), []);
   assert.equal(await store.clear(), 0);
 
-  await store.replace([makeAnnotation({ id: "one" })]);
-  const after = JSON.parse(await readFile(join(dir, "annotations.json"), "utf-8"));
-  assert.equal(after.annotations.length, 1);
-
-  // Concurrent replace calls must serialize into one valid file.
+  // Concurrent writes serialize into one valid v3 file.
   await Promise.all([
-    store.replace([makeAnnotation({ id: "x" })]),
-    store.replace([makeAnnotation({ id: "y" }), makeAnnotation({ id: "z" })]),
+    store.replace([makeFileAnnotation({ id: "x" })]),
+    store.replace([makeFileAnnotation({ id: "y" }), makeFileAnnotation({ id: "z", order: 2 })]),
   ]);
-  const concurrent = JSON.parse(await readFile(join(dir, "annotations.json"), "utf-8"));
-  assert.equal(concurrent.version, 2);
+  const concurrent = await readJson(dir);
+  assert.equal(concurrent.version, 3);
   assert.equal(concurrent.annotations.length, 2);
+});
+
+test("store persistence failures only warn and never reject", async (t) => {
+  const root = await makeTempDir(t);
+  const blocked = join(root, "blocked");
+  await writeFile(blocked, "not a directory");
+  const warnings = [];
+  const store = createStore({ dir: blocked, log: { info() {}, warn: (message) => warnings.push(String(message)) } });
+
+  const result = await store.replace([makeFileAnnotation({ id: "still-works" })]);
+  assert.equal(result.count, 1);
+  assert.deepEqual(
+    store.list().map((item) => item.id),
+    ["still-works"],
+  );
+  assert.ok(warnings.length > 0, "persistence failures are logged");
 });
 
 // ---------------------------------------------------------------------------
 // Markdown
 // ---------------------------------------------------------------------------
 
-test("buildMarkdown groups by page, honours order and labels statuses", () => {
+test("buildMarkdown renders 文件：<path> for file annotations and keeps legacy output", () => {
   assert.equal(buildMarkdown([]), EMPTY_MARKDOWN);
   assert.equal(buildMarkdown([]), "# 暂无未处理的页面批注\n");
   assert.equal(buildMarkdown(null), EMPTY_MARKDOWN);
 
-  const markdown = buildMarkdown([
-    makeAnnotation({ id: "p1", selector: "#second", order: 1 }),
-    makeAnnotation({ id: "a1", pageUrl: ABOUT_URL, pageTitle: "About - Acme", selector: "#about", order: 0 }),
-    makeAnnotation({ id: "p0", selector: "#first", order: 0, status: "applied" }),
-  ]);
+  const fileAnnotation = makeFileAnnotation({
+    id: "p1",
+    selector: "#second",
+    order: 1,
+    pageTitle: "",
+    fileName: "index.html",
+    filePath: "src/index.html",
+  });
+  const fileAnnotation2 = makeFileAnnotation({
+    id: "p0",
+    selector: "#first",
+    order: 0,
+    status: "applied",
+    pageTitle: "",
+  });
+  const legacyAnnotation = makeLegacyAnnotation({ id: "l1", selector: "#about", pageUrl: LEGACY_URL, pageTitle: "About - Acme" });
 
+  const markdown = buildMarkdown([fileAnnotation, legacyAnnotation, fileAnnotation2]);
   assert.match(markdown, /^# 页面批注清单（共 3 处）/);
   assert.match(markdown, /已处理 1 处/);
-  const aboutIndex = markdown.indexOf("## About - Acme");
-  const pricingIndex = markdown.indexOf("## Pricing - Acme");
-  assert.ok(aboutIndex > 0 && pricingIndex > 0);
-  assert.ok(aboutIndex < pricingIndex, "pages are ordered by page.url");
+  assert.ok(markdown.includes("- 文件：`src/index.html`"), "file-backed groups name the source file");
+  assert.ok(markdown.includes("## index.html"), "file.name is the heading when page.title is empty");
+  assert.equal(markdown.indexOf("## index.html") < markdown.indexOf("## About - Acme"), true);
 
   const firstIndex = markdown.indexOf("#first");
   const secondIndex = markdown.indexOf("#second");
@@ -404,146 +547,120 @@ test("buildMarkdown groups by page, honours order and labels statuses", () => {
   assert.match(markdown, /\[待处理\]/);
   assert.match(markdown, /当前文本：/);
   assert.match(markdown, /当前样式：/);
-  assert.match(markdown, /修改指令：\*\*把标题改成更短的文案\*\*/);
+  assert.match(markdown, /修改指令：\*\*把标题改短一点\*\*/);
   assert.ok(markdown.endsWith("\n"));
+  assert.equal(buildMarkdown([fileAnnotation, legacyAnnotation, fileAnnotation2]), markdown, "deterministic");
+
+  const legacyOnly = buildMarkdown([legacyAnnotation]);
+  assert.equal(legacyOnly.includes("文件："), false, "legacy page groups keep the old output");
+  assert.match(legacyOnly, /## About - Acme/);
 
   const custom = buildMarkdown([], { emptyText: "nothing\n" });
   assert.equal(custom, "nothing\n");
-  assert.match(buildMarkdown([makeAnnotation({ id: "p" })], { heading: "自定义清单" }), /^# 自定义清单（共 1 处）/);
+  assert.match(buildMarkdown([makeFileAnnotation({ id: "p" })], { heading: "自定义清单" }), /^# 自定义清单（共 1 处）/);
 });
 
 // ---------------------------------------------------------------------------
-// API dispatch
+// API dispatch (v2)
 // ---------------------------------------------------------------------------
 
-/** Store + API handler in a temp dir with a configurable preview manager. */
-async function makeApiFixture(t, options = {}) {
-  const dir = await makeTempDir(t);
-  const store = createStore({ dir, log: quietLog() });
-  const previewCalls = [];
-  const releaseCalls = [];
-  const detectCalls = [];
-  const previewManager =
-    options.previewManager === undefined
-      ? {
-          async preview(previewOptions) {
-            previewCalls.push(previewOptions);
-            return { origin: "http://127.0.0.1:7777", lease: previewOptions.lease, target: previewOptions.target };
-          },
-          async release(lease) {
-            releaseCalls.push(lease);
-            return true;
-          },
-        }
-      : options.previewManager;
-  const detect =
-    options.detect === undefined
-      ? async (detectOptions) => {
-          detectCalls.push(detectOptions);
-          return [{ port: 5173, origin: PRICING_URL, url: `${PRICING_URL}/`, title: "Vite", kind: "dev", responseMs: 12 }];
-        }
-      : options.detect;
-  const handler = createApiHandler({
-    store,
-    previewManager,
-    detect,
-    config: {
-      maxBodyBytes: options.maxBodyBytes ?? 262144,
-      root: dir,
-      ports: [4321],
-      getHarnessOrigin: () => HARNESS_ORIGIN,
-    },
-    log: quietLog(),
-  });
-  return { dir, store, handler, previewCalls, releaseCalls, detectCalls };
-}
+test("API exposes state/saveFile/save/setStatus/remove/clear/markdown", async (t) => {
+  const { dir, handler } = await makeApiFixture(t);
 
-test("API dispatches every protocol method", async (t) => {
-  const fixture = await makeApiFixture(t);
-  const { handler } = fixture;
+  let response = await api(handler, "state");
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.json, { ok: true, annotations: [], pages: [] });
 
-  let response = await api(handler, "save", {
-    sid: "session-1",
+  response = await api(handler, "saveFile", { url: RESOURCE_A, annotations: [makeFileAnnotation({ id: "a" })] });
+  assert.equal(response.status, 200);
+  assert.equal(response.json.ok, true);
+  assert.equal(response.json.count, 1);
+  assert.match(response.json.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(response.json.annotations[0].id, "a");
+  assert.equal(response.json.annotations[0].file.path, "src/index.html");
+
+  response = await api(handler, "saveFile", {
+    url: RESOURCE_B,
     annotations: [
-      makeAnnotation({ id: "a", order: 0 }),
-      makeAnnotation({ id: "b", order: 1, status: "applied" }),
+      {
+        id: "b",
+        selector: "#about",
+        tag: "h2",
+        note: "改一下",
+        order: 0,
+      },
     ],
   });
   assert.equal(response.status, 200);
-  assert.equal(response.json.ok, true);
-  assert.equal(response.json.count, 2);
-  assert.match(response.json.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(response.json.annotations[0].page.url, RESOURCE_B, "saveFile assigns the group key");
+  assert.deepEqual(response.json.annotations[0].file, {
+    sessionId: SESSION_ID,
+    path: "about.html",
+    name: "about.html",
+    address: RESOURCE_B,
+  });
 
-  response = await api(handler, "state", { sid: "session-1" });
-  assert.equal(response.status, 200);
-  assert.equal(response.json.root, fixture.dir);
-  assert.deepEqual(response.json.services, []);
+  response = await api(handler, "state");
   assert.equal(response.json.annotations.length, 2);
-  assert.equal(response.json.pages.length, 1);
-  assert.equal(response.json.pages[0].count, 2);
-  assert.equal(response.json.pages[0].pending, 1);
+  assert.equal(response.json.pages.length, 2);
+  const pageA = response.json.pages.find((page) => page.url === RESOURCE_A);
+  assert.equal(pageA.count, 1);
+  assert.equal(pageA.file.name, "index.html");
+  const pageB = response.json.pages.find((page) => page.url === RESOURCE_B);
+  assert.equal(pageB.file.path, "about.html");
 
-  response = await api(handler, "detect", { sid: "session-1", ports: [5173] });
+  response = await api(handler, "saveFile", { url: RESOURCE_A, annotations: [] });
   assert.equal(response.status, 200);
-  assert.equal(response.json.services.length, 1);
-  assert.equal(response.json.services[0].port, 5173);
-  assert.deepEqual(fixture.detectCalls[0], { ports: [4321, 5173] });
+  assert.equal(response.json.count, 0);
+  response = await api(handler, "state");
+  assert.equal(response.json.annotations.length, 1, "only the requested file group was replaced");
+  assert.equal(response.json.annotations[0].page.url, RESOURCE_B);
 
-  response = await api(handler, "state", { sid: "session-1" });
-  assert.equal(response.json.services.length, 1, "state reuses the detection cache");
+  response = await api(handler, "save", {
+    annotations: [makeFileAnnotation({ id: "again" }), makeLegacyAnnotation({ id: "old" })],
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.json.count, 2);
+  assert.equal(response.json.updatedAt !== undefined, true);
 
-  response = await api(handler, "setStatus", { sid: "session-1", id: "a", status: "applied" });
+  response = await api(handler, "setStatus", { id: "again", status: "applied" });
   assert.equal(response.status, 200);
   assert.equal(response.json.annotation.status, "applied");
 
-  response = await api(handler, "reorder", { sid: "session-1", pageUrl: PRICING_URL, ids: ["b", "a"] });
+  response = await api(handler, "markdown", { pageUrl: RESOURCE_A });
   assert.equal(response.status, 200);
-  assert.deepEqual(
-    response.json.annotations.map((item) => item.id),
-    ["b", "a"],
-  );
+  assert.equal(response.json.count, 1);
+  assert.match(response.json.markdown, /文件：`src\/index\.html`/);
 
-  response = await api(handler, "markdown", { sid: "session-1", pageUrl: PRICING_URL });
+  response = await api(handler, "remove", { id: "old" });
   assert.equal(response.status, 200);
-  assert.equal(response.json.count, 2);
-  assert.match(response.json.markdown, /## Pricing - Acme/);
-
-  response = await api(handler, "preview", { sid: "session-1", url: `${PRICING_URL}/app`, lease: "lease-1" });
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.json, { ok: true, origin: "http://127.0.0.1:7777", lease: "lease-1", target: `${PRICING_URL}/app` });
-  assert.deepEqual(fixture.previewCalls[0], {
-    target: `${PRICING_URL}/app`,
-    lease: "lease-1",
-    parentOrigin: HARNESS_ORIGIN,
-  });
-
-  response = await api(handler, "preview", { sid: "session-1", url: `${PRICING_URL}/other` });
-  assert.equal(response.status, 200);
-  assert.match(response.json.lease, /^[0-9a-f-]{36}$/, "a lease is generated when omitted");
-
-  response = await api(handler, "releasePreview", { sid: "session-1", lease: "lease-1" });
-  assert.equal(response.status, 200);
-  assert.equal(response.json.released, true);
-  assert.deepEqual(fixture.releaseCalls, ["lease-1"]);
-
-  response = await api(handler, "remove", { sid: "session-1", id: "does-not-exist" });
-  assert.equal(response.status, 200);
+  assert.equal(response.json.removed, true);
+  response = await api(handler, "remove", { id: "old" });
   assert.equal(response.json.removed, false);
 
-  response = await api(handler, "clear", { sid: "session-1", pageUrl: PRICING_URL });
+  response = await api(handler, "clear", { pageUrl: RESOURCE_A });
   assert.equal(response.status, 200);
-  assert.equal(response.json.cleared, 2);
+  assert.equal(response.json.cleared, 1);
+  response = await api(handler, "state");
+  assert.equal(response.json.annotations.length, 0);
+
+  const disk = await readJson(dir);
+  assert.equal(disk.version, 3);
 });
 
-test("API rejects bad peers, methods, args and targets with protocol codes", async (t) => {
+test("API rejects bad peers, methods, args and bodies with protocol codes", async (t) => {
   const fixture = await makeApiFixture(t);
-  const { handler, store } = fixture;
+  const { handler } = fixture;
+
+  assert.deepEqual([...API_CODES], ["badMethod", "badArgs", "methodNotAllowed", "loopbackOnly", "internal"]);
 
   let response = await api(handler, "state", {}, { remoteAddress: "10.0.0.9" });
   assert.equal(response.status, 403);
   assert.equal(response.json.code, "loopbackOnly");
   assert.equal(isLoopbackAddress("10.0.0.9"), false);
   assert.equal(isLoopbackAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackAddress("::1"), true);
+  assert.equal(isLoopbackAddress(""), false);
 
   response = await invoke(handler, { method: "GET", url: API_PATH });
   assert.equal(response.status, 405);
@@ -567,108 +684,58 @@ test("API rejects bad peers, methods, args and targets with protocol codes", asy
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badArgs");
 
+  response = await invoke(handler, {
+    method: "POST",
+    url: API_PATH,
+    headers: { "content-type": "application/json" },
+    body: "[]",
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.code, "badArgs");
+
   response = await api(handler, "no-such-method");
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badMethod");
 
+  for (const removed of ["preview", "detect", "releasePreview", "reorder"]) {
+    response = await api(handler, removed, {});
+    assert.equal(response.status, 400, `${removed} is gone`);
+    assert.equal(response.json.code, "badMethod");
+  }
+
+  response = await api(handler, "saveFile", { annotations: [] });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.code, "badArgs");
+  response = await api(handler, "saveFile", { url: "   ", annotations: [] });
+  assert.equal(response.json.code, "badArgs");
+  response = await api(handler, "saveFile", { url: RESOURCE_A, annotations: "nope" });
+  assert.equal(response.json.code, "badArgs");
   response = await api(handler, "save", { annotations: "nope" });
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badArgs");
-
+  response = await api(handler, "setStatus", { id: "", status: "applied" });
+  assert.equal(response.json.code, "badArgs");
   response = await api(handler, "setStatus", { id: "a", status: "weird" });
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badArgs");
-
   response = await api(handler, "setStatus", { id: "missing", status: "applied" });
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badArgs");
-
-  response = await api(handler, "releasePreview", {});
+  response = await api(handler, "remove", {});
   assert.equal(response.status, 400);
   assert.equal(response.json.code, "badArgs");
-
-  response = await api(handler, "preview", { url: "http://example.com/app" });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
-
-  response = await api(handler, "preview", { url: "file:///etc/passwd" });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
-
-  response = await api(handler, "preview", { url: `${HARNESS_ORIGIN}/` });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
-
-  response = await api(handler, "preview", { url: `http://user:pass@127.0.0.1:5173/` });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
-
-  const tooMany = {
-    async preview() {
-      const error = new Error("limit");
-      error.code = "tooManyPreviews";
-      throw error;
-    },
-    async release() {
-      return true;
-    },
-  };
-  const tooManyHandler = createApiHandler({
-    store,
-    previewManager: tooMany,
-    config: { root: fixture.dir },
-    log: quietLog(),
-  });
-  response = await api(tooManyHandler, "preview", { url: `${PRICING_URL}/` });
-  assert.equal(response.status, 429);
-  assert.equal(response.json.code, "tooManyPreviews");
-
-  const notLocal = {
-    async preview() {
-      const error = new Error("nope");
-      error.code = "notLocalTarget";
-      throw error;
-    },
-    async release() {
-      return true;
-    },
-  };
-  const notLocalHandler = createApiHandler({ store, previewManager: notLocal, config: {}, log: quietLog() });
-  response = await api(notLocalHandler, "preview", { url: `${PRICING_URL}/` });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
-
-  const failing = {
-    async preview() {
-      throw new Error("boom");
-    },
-    async release() {
-      throw new Error("boom");
-    },
-  };
-  const failingHandler = createApiHandler({ store, previewManager: failing, config: {}, log: quietLog() });
-  response = await api(failingHandler, "preview", { url: `${PRICING_URL}/` });
-  assert.equal(response.status, 502);
-  assert.equal(response.json.code, "previewFailed");
-  response = await api(failingHandler, "releasePreview", { lease: "lease-x" });
-  assert.equal(response.status, 502);
-  assert.equal(response.json.code, "previewFailed");
-
-  const noPreviewHandler = createApiHandler({ store, detect: null, config: {}, log: quietLog() });
-  response = await api(noPreviewHandler, "preview", { url: `${PRICING_URL}/` });
-  assert.equal(response.status, 502);
-  assert.equal(response.json.code, "previewFailed");
-  response = await api(noPreviewHandler, "detect", {});
-  assert.equal(response.status, 500);
-  assert.equal(response.json.code, "internal");
+  response = await api(handler, "markdown", { pageUrl: RESOURCE_A });
+  assert.equal(response.status, 200);
+  assert.equal(response.json.count, 0);
 
   response = await invoke(handler, { method: "OPTIONS", url: API_PATH });
   assert.equal(response.status, 204);
   assert.equal(response.text, "");
 
-  const cappedFixture = await makeApiFixture(t, { maxBodyBytes: 64 });
-  response = await api(cappedFixture.handler, "save", {
-    annotations: [makeAnnotation({ id: "huge", note: "x".repeat(500) })],
+  const capped = await makeApiFixture(t, { maxBodyBytes: 64 });
+  response = await api(capped.handler, "saveFile", {
+    url: RESOURCE_A,
+    annotations: [makeFileAnnotation({ note: "x".repeat(500) })],
   });
   assert.equal(response.status, 413);
   assert.equal(response.json.code, "badArgs");
@@ -678,10 +745,10 @@ test("API rejects bad peers, methods, args and targets with protocol codes", asy
 // Plugin wiring (fake Cordis context)
 // ---------------------------------------------------------------------------
 
-test("apply registers the prefix route, legacy bridge, cleanup and three tools", async (t) => {
+test("apply registers the prefix route, overlay, legacy bridge and three tools", async (t) => {
   const dir = await makeTempDir(t);
   const fake = makeCtx();
-  apply(fake.ctx, { dir, legacyRoute: "/api/annotate-sync/annotations", ports: [4321] });
+  apply(fake.ctx, { dir });
 
   assert.equal(name, "annotate-sync");
   assert.deepEqual([...inject], ["webServer", "tools"]);
@@ -708,40 +775,53 @@ test("apply registers the prefix route, legacy bridge, cleanup and three tools",
   assert.equal(response.status, 200);
   assert.equal(response.json.ok, true);
   assert.equal(response.json.name, "annotate-sync");
+  assert.equal(response.json.route, "/__dsh-annotate-sync");
+  assert.equal(response.json.tool, true);
 
   response = await invoke(prefix.handler, { method: "GET", url: "/__dsh-annotate-sync/unknown" });
   assert.equal(response.status, 404);
   assert.equal(response.json.code, "notFound");
 
+  response = await invoke(prefix.handler, { method: "GET", url: "/__dsh-annotate-sync/overlay.js" });
+  assert.equal(response.status, 200, "overlay.js is served from the bundle");
+  assert.match(String(response.headers["content-type"]), /javascript/);
+  assert.equal(response.headers["access-control-allow-origin"], "*");
+  assert.equal(response.headers["cache-control"], "no-store");
+  const overlaySource = response.text;
+  assert.ok(overlaySource.length > 0);
+  response = await invoke(prefix.handler, { method: "HEAD", url: "/__dsh-annotate-sync/overlay.js" });
+  assert.equal(response.status, 200);
+  assert.equal(response.text, "");
+
+  // saveFile through the mounted prefix route.
   response = await invoke(prefix.handler, {
     method: "POST",
     url: API_PATH,
-    body: { method: "save", args: { annotations: [makeAnnotation({ id: "wire-1" }), makeAnnotation({ id: "wire-2" })] } },
+    body: { method: "saveFile", args: { url: RESOURCE_A, annotations: [makeFileAnnotation({ id: "wire-1" })] } },
   });
   assert.equal(response.status, 200);
-  assert.equal(response.json.count, 2);
+  assert.equal(response.json.count, 1);
 
-  // The overlay asset is served when bundled (`lib/overlay.js`) or 404 before.
-  response = await invoke(prefix.handler, { method: "GET", url: "/__dsh-annotate-sync/overlay.js" });
-  assert.ok([200, 404].includes(response.status));
-  if (response.status === 200) {
-    assert.match(String(response.headers["content-type"]), /javascript/);
-    assert.equal(response.headers["access-control-allow-origin"], "*");
-  }
+  response = await invoke(prefix.handler, { method: "POST", url: API_PATH, body: { method: "state", args: {} } });
+  assert.equal(response.status, 200);
+  assert.equal(response.json.annotations.length, 1);
+  assert.equal(response.json.annotations[0].file.name, "index.html");
 
+  // The removed preview API is not reachable through the mounted route.
   response = await invoke(prefix.handler, {
     method: "POST",
     url: API_PATH,
-    body: { method: "preview", args: { url: "http://example.com/app" } },
+    body: { method: "preview", args: { url: LEGACY_URL } },
   });
-  assert.equal(response.status, 403);
-  assert.equal(response.json.code, "notLocalTarget");
+  assert.equal(response.status, 400);
+  assert.equal(response.json.code, "badMethod");
 
+  // Legacy v1 sync bridge: permissive CORS, loopback-only, annotations in/out.
   let legacyResponse = await invoke(legacy.handler, { method: "GET", url: "/api/annotate-sync/annotations" });
   assert.equal(legacyResponse.status, 200);
   assert.equal(legacyResponse.headers["access-control-allow-origin"], "*");
-  assert.equal(legacyResponse.json.count, 2);
-  assert.match(legacyResponse.json.markdown, /Pricing/);
+  assert.equal(legacyResponse.json.count, 1);
+  assert.match(legacyResponse.json.markdown, /文件：`src\/index\.html`/);
 
   legacyResponse = await invoke(legacy.handler, { method: "OPTIONS", url: "/api/annotate-sync/annotations" });
   assert.equal(legacyResponse.status, 204);
@@ -750,7 +830,7 @@ test("apply registers the prefix route, legacy bridge, cleanup and three tools",
   legacyResponse = await invoke(legacy.handler, {
     method: "POST",
     url: "/api/annotate-sync/annotations",
-    body: { annotations: [makeAnnotation({ id: "legacy-1" })] },
+    body: { annotations: [makeLegacyAnnotation({ id: "legacy-1" })] },
   });
   assert.equal(legacyResponse.status, 200);
   assert.equal(legacyResponse.json.count, 1);
@@ -758,7 +838,7 @@ test("apply registers the prefix route, legacy bridge, cleanup and three tools",
   legacyResponse = await invoke(legacy.handler, {
     method: "POST",
     url: "/api/annotate-sync/annotations",
-    body: [makeAnnotation({ id: "legacy-array" })],
+    body: [makeLegacyAnnotation({ id: "legacy-array" })],
   });
   assert.equal(legacyResponse.status, 200);
   assert.equal(legacyResponse.json.count, 1);
@@ -787,7 +867,7 @@ test("apply registers the prefix route, legacy bridge, cleanup and three tools",
   for (const disposer of fake.disposers) disposer();
 });
 
-test("apply honours tool:false and legacyRoute:'' and tolerates a missing tools service", async (t) => {
+test("apply honours tool:false, legacyRoute:'' and tolerates missing services", async (t) => {
   const dir = await makeTempDir(t);
 
   const noTools = makeCtx();
@@ -796,14 +876,27 @@ test("apply honours tool:false and legacyRoute:'' and tolerates a missing tools 
   assert.equal(noTools.routes[0].kind, "prefix");
   assert.equal(noTools.tools.length, 0);
 
+  const customRoute = makeCtx();
+  apply(customRoute.ctx, { dir, route: "custom/annotate", legacyRoute: "" });
+  assert.equal(customRoute.routes[0].path, "/custom/annotate");
+
   const minimal = makeCtx({ withTools: false, withWebServer: true });
   assert.doesNotThrow(() => apply(minimal.ctx, { dir, legacyRoute: "" }));
   assert.equal(minimal.routes.length, 1);
 
+  const noWebServer = makeCtx({ withWebServer: false });
+  assert.doesNotThrow(() => apply(noWebServer.ctx, { dir, legacyRoute: "" }));
+  assert.ok(
+    noWebServer.warnings.some((warning) => /route .* unavailable/.test(warning)),
+    "a missing webServer degrades to a warning",
+  );
+
   const defaultRoutes = makeCtx();
   apply(defaultRoutes.ctx, { dir });
   assert.ok(
-    defaultRoutes.routes.some((route) => route.kind === "exact" && route.path === "/api/annotate-sync/annotations"),
+    defaultRoutes.routes.some(
+      (route) => route.kind === "exact" && route.path === "/api/annotate-sync/annotations",
+    ),
     "the legacy route is on by default",
   );
 });
@@ -812,7 +905,7 @@ test("apply honours tool:false and legacyRoute:'' and tolerates a missing tools 
 // Model tools
 // ---------------------------------------------------------------------------
 
-test("model tools read pending annotations, update status and clear", async (t) => {
+test("model tools read file-aware annotations, update status and clear", async (t) => {
   const dir = await makeTempDir(t);
   const fake = makeCtx();
   apply(fake.ctx, { dir });
@@ -822,13 +915,22 @@ test("model tools read pending annotations, update status and clear", async (t) 
     method: "POST",
     url: API_PATH,
     body: {
-      method: "save",
+      method: "saveFile",
       args: {
+        url: RESOURCE_A,
         annotations: [
-          makeAnnotation({ id: "tool-pending", order: 0 }),
-          makeAnnotation({ id: "tool-applied", order: 1, status: "applied" }),
+          makeFileAnnotation({ id: "tool-pending", order: 0 }),
+          makeFileAnnotation({ id: "tool-applied", order: 1, status: "applied" }),
         ],
       },
+    },
+  });
+  await invoke(prefix.handler, {
+    method: "POST",
+    url: API_PATH,
+    body: {
+      method: "saveFile",
+      args: { url: RESOURCE_B, annotations: [{ id: "other", selector: "#about", note: "改一下", order: 0 }] },
     },
   });
 
@@ -838,36 +940,46 @@ test("model tools read pending annotations, update status and clear", async (t) 
   assert.ok(read && setStatus && clear);
 
   let value = await read.execute({});
-  assert.equal(value.count, 1);
-  assert.equal(value.annotations[0].id, "tool-pending");
-  assert.match(value.markdown, /待处理/);
+  assert.equal(value.count, 2, "pending only by default");
+  assert.match(value.markdown, /文件：`src\/index\.html`/);
+  assert.match(value.markdown, /把标题改短一点/);
   const rendered = read.output.render({}, value);
   assert.deepEqual(rendered, [{ type: "text", text: value.markdown }]);
 
   value = await read.execute({ includeDone: true });
-  assert.equal(value.count, 2);
+  assert.equal(value.count, 3);
 
   value = await read.execute({ status: "applied" });
   assert.equal(value.count, 1);
   assert.equal(value.annotations[0].id, "tool-applied");
 
-  value = await read.execute({ pageUrl: ABOUT_URL });
+  value = await read.execute({ pageUrl: RESOURCE_B });
+  assert.equal(value.count, 1);
+  assert.equal(value.annotations[0].id, "other");
+  assert.equal(value.annotations[0].file.path, "about.html", "missing file metadata is derived from the address");
+  assert.match(value.markdown, /文件：`about\.html`/);
+
+  value = await read.execute({ pageUrl: "dsh-resource://file/session/nope/missing.html" });
   assert.equal(value.count, 0);
   assert.equal(value.markdown, EMPTY_MARKDOWN);
 
-  const updated = await setStatus.execute({ status: "applied", all: true, pageUrl: PRICING_URL });
+  const updated = await setStatus.execute({ status: "applied", all: true, pageUrl: RESOURCE_A });
   assert.deepEqual(updated, { updated: 2, count: 2 });
   const setRendered = setStatus.output.render({ status: "applied" }, updated);
   assert.match(setRendered[0].text, /已处理/);
 
   value = await read.execute({ status: "pending" });
-  assert.equal(value.count, 0);
+  assert.equal(value.count, 1);
+  assert.equal(value.annotations[0].id, "other");
 
   await assert.rejects(() => setStatus.execute({ status: "bogus" }), /status must be pending or applied/);
 
-  const cleared = await clear.execute({ pageUrl: PRICING_URL });
+  const cleared = await clear.execute({ pageUrl: RESOURCE_A });
   assert.deepEqual(cleared, { cleared: 2 });
   assert.match(clear.output.render({}, cleared)[0].text, /2/);
+
+  value = await read.execute({ includeDone: true });
+  assert.equal(value.count, 1);
 
   const legacy = await invoke(prefix.handler, { method: "GET", url: "/__dsh-annotate-sync/" });
   assert.equal(legacy.status, 200);
