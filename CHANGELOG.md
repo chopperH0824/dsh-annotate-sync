@@ -4,6 +4,23 @@ All notable changes to `dsh-annotate-sync` are documented here. The format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-10-28
+
+Discovery fix: the plugin was active but its only entry was the right-sidebar tab,
+which is invisible while that column is collapsed.
+
+### Added
+
+- Permanent **批注 / Annotations** action beside Settings in the left sidebar
+  (`sidebar.footer.action`), icon-only in the collapsed rail.
+- The Annotations tab opens once automatically on first launch after install or
+  update, so starting DSH and seeing the annotator are the same moment.
+
+### Changed
+
+- The right-sidebar guide entry now carries an explicit id, so pinning and card
+  identity are stable in the guide list.
+
 ## [1.0.0] — 2026-10-28
 
 The annotation UI is now part of the plugin, not a separate demo page.

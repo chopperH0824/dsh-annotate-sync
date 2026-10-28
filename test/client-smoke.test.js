@@ -196,9 +196,10 @@ test("client half loads through the ModuleLoader envelope and registers its UI",
   assert.equal(typeof registrations.tabs[0].title(), "string");
   assert.equal(registrations.tabs[0].guide.length, 1);
   assert.equal(typeof registrations.tabs[0].guide[0].icon, "function");
+  assert.equal(registrations.tabs[0].guide[0].id, "annotate-sync");
 
   const slotNames = registrations.slots.map((options) => options.name).sort();
-  assert.deepEqual(slotNames, ["conversation.input.dock", "sidebar.right.pane.tab"]);
+  assert.deepEqual(slotNames, ["conversation.input.dock", "sidebar.footer.action", "sidebar.right.pane.tab"]);
   const panel = registrations.slots.find((options) => options.name === "sidebar.right.pane.tab");
   assert.equal(panel.key, "annotate-sync");
   assert.equal(typeof panel.key, "string");
