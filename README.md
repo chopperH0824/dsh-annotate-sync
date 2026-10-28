@@ -24,7 +24,9 @@ needed in your app.
 
 ## Install
 
-### From npm (after publishing)
+### From npm
+
+> Published: https://www.npmjs.com/package/dsh-annotate-sync
 
 ```bash
 dsh plugin --profile desktop add dsh-annotate-sync@1.0.0

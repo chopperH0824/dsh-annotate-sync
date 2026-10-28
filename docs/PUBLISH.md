@@ -41,17 +41,29 @@ git push --tags
 
 ## 2. 发布到 npm
 
-包名 `dsh-annotate-sync` 目前未被占用（发布前可再确认）：
+> 状态：`dsh-annotate-sync@1.0.0` 已发布（2026-10-28），npm 页：
+> https://www.npmjs.com/package/dsh-annotate-sync
+
+当前 npm 账号只配置了**安全密钥 / 指纹**，没有 TOTP 验证器。npm 已不再允许新配
+TOTP，因此直接 `npm publish` 会返回 `EOTP`。请使用 npm 官方的 **staged publishing**：
 
 ```bash
-npm view dsh-annotate-sync version   # 404 = 可用
-npm login
-npm whoami
-npm publish --access public
+npm login                       # 浏览器指纹登录
+npx -y npm@12.2.1 stage publish --access public
 ```
 
-- 版本号已经设为 `1.0.0`，与 CHANGELOG 对应。
-- 后续发布先改 `version` 与 `CHANGELOG.md`，再 `npm publish`。
+然后到 https://www.npmjs.com/ 的 **Staged Packages** 页面，用指纹 **Approve**。
+也可以用交互式终端：
+
+```bash
+npx -y npm@12.2.1 stage approve <stage-id>
+```
+
+- 首次 stage 一个不存在的包时，npm 会先发布一个 `0.0.0-stage` 占位版本，批准后
+  正式版本才成为 `latest`。
+- 后续发布：先改 `version` 与 `CHANGELOG.md`，再 `stage publish` + 指纹批准。
+- 不要为了绕过 2FA 去用长期 token：本仓库的 token 已被要求轮换，且 npm 计划
+  2027-01 取消 2FA-bypass token 的直接发布权限。
 - 若使用私有 registry，改 `publishConfig.registry` 后再发布。
 
 ## 3. 让别人安装

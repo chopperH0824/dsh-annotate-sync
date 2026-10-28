@@ -21,7 +21,9 @@
 
 ## 安装
 
-### 从 npm 安装（发布后）
+### 从 npm 安装
+
+> 已发布：https://www.npmjs.com/package/dsh-annotate-sync
 
 ```bash
 # macOS Desktop 自带 CLI
